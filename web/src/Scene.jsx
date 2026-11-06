@@ -8,14 +8,24 @@ import { EffectComposer, Bloom, Vignette } from "@react-three/postprocessing";
 const unitBox = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0);
 const baseName = (p) => p.split("/").pop();
 
-// Churn heat ramp: cold steel blue -> amber -> hot red.
-const COLD = new THREE.Color("#2c4266"), WARM = new THREE.Color("#e8a33d"), HOT = new THREE.Color("#ff3b2f");
-const NO_CHURN = new THREE.Color("#25344f");
+// Churn as a fall foliage report: discrete stages, like a leaf-peeping map.
+// `upTo` is the churn percentile (among files that changed at all) where the stage ends.
+export const STAGES = [
+  { name: "None", color: "#2e4a3b", upTo: 0 },
+  { name: "Patchy", color: "#8f9c3a", upTo: 0.25 },
+  { name: "Partial", color: "#e3b02f", upTo: 0.55 },
+  { name: "Near peak", color: "#f0731c", upTo: 0.85 },
+  { name: "Peak", color: "#d92b1f", upTo: 1 },
+];
+const STAGE_COLORS = STAGES.map((s) => new THREE.Color(s.color));
 export function heat(b, out = new THREE.Color()) {
-  if (b.churn === 0) return out.copy(NO_CHURN);
-  const t = b.churnPct ** 1.6; // ease: most files stay cool, the top few burn
-  return t < 0.6 ? out.copy(COLD).lerp(WARM, t / 0.6) : out.copy(WARM).lerp(HOT, (t - 0.6) / 0.4);
+  if (b.churn === 0) return out.copy(STAGE_COLORS[0]);
+  const i = STAGES.findIndex((s, k) => k > 0 && b.churnPct < s.upTo);
+  return out.copy(STAGE_COLORS[i === -1 ? STAGES.length - 1 : i]);
 }
+const SKY = "#5cc8ff", BERRY = "#c77dff"; // imports / imported by
+// Bridges are pushed past the bloom threshold: the only things in the city that glow.
+const SKY_HDR = new THREE.Color(SKY).multiplyScalar(1.8), BERRY_HDR = new THREE.Color(0.45, 0.18, 2.2); // linear; channels clip at 1 on screen, so keep red low to stay violet
 
 function Buildings({ city, focus, onHover, onSelect }) {
   const ref = useRef();
@@ -52,7 +62,7 @@ function Buildings({ city, focus, onHover, onSelect }) {
   );
 }
 
-// Glowing roof caps on the top 5% churn files (bloom picks them up).
+// Pale gold roof caps on the top 5% churn files.
 function HotRoofs({ city }) {
   const ref = useRef();
   const hot = useMemo(() => city.buildings.filter((b) => b.churn > 0 && b.churnPct >= 0.95), [city]);
@@ -68,7 +78,7 @@ function HotRoofs({ city }) {
   if (!hot.length) return null;
   return (
     <instancedMesh key={city.slug + "-hot"} ref={ref} args={[unitBox, undefined, hot.length]} raycast={() => null}>
-      <meshBasicMaterial color={[5, 1.1, 0.4]} toneMapped={false} />
+      <meshBasicMaterial color="#f6d27a" />
     </instancedMesh>
   );
 }
@@ -80,7 +90,7 @@ function Districts({ city }) {
     city.districts.forEach((d, i) => {
       m.compose(new THREE.Vector3(d.x, d.y, d.z), q, new THREE.Vector3(d.w, d.t, d.d));
       ref.current.setMatrixAt(i, m);
-      ref.current.setColorAt(i, c.setHSL(0.62, 0.35, 0.09 + Math.min(d.depth, 6) * 0.025));
+      ref.current.setColorAt(i, c.setHSL(0.07, 0.3, 0.08 + Math.min(d.depth, 6) * 0.022));
     });
     ref.current.instanceMatrix.needsUpdate = true;
     ref.current.instanceColor.needsUpdate = true;
@@ -109,9 +119,8 @@ function Landmark({ city }) {
   return (
     <Html position={[b.x, b.y + b.h + 6, b.z]} center zIndexRange={[20, 10]} style={{ pointerEvents: "none" }}>
       <div className="landmark">
-        <div className="lm-kicker">{b.loc >= 3000 ? "THE GOD COMPONENT" : "TALLEST TOWER"}</div>
         <div className="lm-name">{baseName(b.path)}</div>
-        <div className="lm-meta">{b.loc.toLocaleString()} lines · {b.churn} commits this year</div>
+        <div className="lm-meta">{b.loc >= 3000 ? "The god component" : "Tallest tower"} · {b.loc.toLocaleString()} lines · {b.churn} commits this year</div>
       </div>
     </Html>
   );
@@ -132,8 +141,8 @@ function Focus({ city, indices, active }) {
         const w = b.w * 1.05, h = b.h * 1.03, d = b.d * 1.05;
         return (
           <mesh key={i} position={[b.x, b.y, b.z]} scale={[w, h, d]} geometry={unitBox} raycast={() => null} userData={{ active: isActive, w, h, d }}>
-            <meshBasicMaterial color={isActive ? [0.4, 2.6, 3.2] : [0.3, 1.2, 1.6]} transparent opacity={isActive ? 0.35 : 0.18} toneMapped={false} depthWrite={false} />
-            <Edges color={isActive ? "#9ff4ff" : "#4fb8d6"} />
+            <meshBasicMaterial color={isActive ? [0.5, 2, 3.2] : [0.35, 1, 1.6]} transparent opacity={isActive ? 0.35 : 0.18} toneMapped={false} depthWrite={false} />
+            <Edges color={isActive ? "#bfe8ff" : SKY} />
           </mesh>
         );
       })}
@@ -141,7 +150,7 @@ function Focus({ city, indices, active }) {
   );
 }
 
-function Bridges({ city, index, incoming }) {
+function Bridges({ city, index, incoming, limit = 60, width = 3 }) {
   const b = city.buildings[index];
   const lines = useMemo(() => {
     const top = (x) => [x.x, x.y + x.h, x.z];
@@ -150,12 +159,12 @@ function Bridges({ city, index, incoming }) {
       const mid = [(a.x + c.x) / 2, Math.max(a.y + a.h, c.y + c.h) + 6 + dist * 0.35, (a.z + c.z) / 2];
       return { start: top(a), end: top(c), mid, color };
     };
-    const out = b.imports.slice(0, 60).map((j) => arc(b, city.buildings[j], "#46e3ff"));
-    const inc = (incoming[index] ?? []).slice(0, 60).map((j) => arc(city.buildings[j], b, "#ff4fd8"));
+    const out = b.imports.slice(0, limit).map((j) => arc(b, city.buildings[j], SKY_HDR));
+    const inc = (incoming[index] ?? []).slice(0, limit).map((j) => arc(city.buildings[j], b, BERRY_HDR));
     return [...out, ...inc];
-  }, [city, index, incoming, b]);
+  }, [city, index, incoming, b, limit]);
   return lines.map((l, k) => (
-    <QuadraticBezierLine key={k} start={l.start} end={l.end} mid={l.mid} color={l.color} lineWidth={1.6} transparent opacity={0.85} toneMapped={false} />
+    <QuadraticBezierLine key={k} start={l.start} end={l.end} mid={l.mid} color={l.color} lineWidth={width} toneMapped={false} />
   ));
 }
 
@@ -172,7 +181,7 @@ function ScanRing({ size, active }) {
   return (
     <mesh ref={ref} rotation-x={-Math.PI / 2} position-y={0.3} raycast={() => null}>
       <ringGeometry args={[0.97, 1, 128]} />
-      <meshBasicMaterial color={[0.5, 2.5, 3]} transparent toneMapped={false} depthWrite={false} />
+      <meshBasicMaterial color={[0.6, 2, 3.2]} transparent toneMapped={false} depthWrite={false} />
     </mesh>
   );
 }
@@ -244,15 +253,15 @@ export default function Scene({ city, hover, setHover, selected, onSelect, tour,
   const bridgeFor = tour?.active ?? selected;
   return (
     <>
-      <color attach="background" args={["#060a14"]} />
-      <fog attach="fog" args={["#060a14", city.size * 0.9, city.size * 3.2]} />
-      <hemisphereLight args={["#9fb7ff", "#0a0f1e", 0.9]} />
-      <directionalLight position={[city.size, city.size * 1.5, city.size * 0.6]} intensity={1.6} />
+      <color attach="background" args={["#2a1d13"]} />
+      <fog attach="fog" args={["#2a1d13", city.size * 0.9, city.size * 3.2]} />
+      <hemisphereLight args={["#ffe3c4", "#1a120b", 0.85]} />
+      <directionalLight position={[city.size, city.size * 1.1, city.size * 0.5]} intensity={1.7} color="#ffd3a1" />
       <mesh rotation-x={-Math.PI / 2} position-y={-0.02} raycast={() => null}>
         <planeGeometry args={[city.size * 8, city.size * 8]} />
-        <meshStandardMaterial color="#0a1020" roughness={1} />
+        <meshStandardMaterial color="#33241a" roughness={1} />
       </mesh>
-      <gridHelper args={[city.size * 4, 80, "#16223d", "#101a30"]} position-y={0.01} />
+      <gridHelper args={[city.size * 4, 80, "#3e2d1f", "#33251a"]} position-y={0.01} />
       <Districts city={city} />
       <Buildings city={city} focus={focus} onHover={setHover} onSelect={onSelect} />
       {!tour && <HotRoofs city={city} />}
@@ -260,13 +269,13 @@ export default function Scene({ city, hover, setHover, selected, onSelect, tour,
       {!tour && <Landmark city={city} />}
       {tour && <Focus city={city} indices={[...focus]} active={tour.active} />}
       {selected != null && !tour && <Focus city={city} indices={[selected]} active={selected} />}
-      {bridgeFor != null && <Bridges city={city} index={bridgeFor} incoming={incoming} />}
+      {bridgeFor != null && <Bridges city={city} index={bridgeFor} incoming={incoming} limit={tour ? 12 : 60} width={tour ? 2 : 3} />}
       {hover != null && <Tooltip city={city} index={hover} />}
       <ScanRing size={city.size} active={busy} />
       <Rig city={city} apiRef={apiRef} busy={busy || !!tour} />
       <EffectComposer multisampling={0}>
         <Bloom mipmapBlur luminanceThreshold={1} intensity={1.1} radius={0.7} />
-        <Vignette offset={0.3} darkness={0.7} />
+        <Vignette offset={0.3} darkness={0.45} />
       </EffectComposer>
     </>
   );

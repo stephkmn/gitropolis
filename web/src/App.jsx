@@ -1,11 +1,12 @@
 import { Component, useCallback, useEffect, useRef, useState } from "react";
 import { Canvas } from "@react-three/fiber";
-import Scene from "./Scene.jsx";
+import Scene, { STAGES } from "./Scene.jsx";
 import { speak, stopSpeaking, listen, canListen, setMuted } from "./speech.js";
 
 const API = (import.meta.env.VITE_API_URL || "http://localhost:8787").replace(/\/$/, "");
 const DEFAULT_REPO = "excalidraw/excalidraw";
 const slugOf = (repo) => repo.replace(/^https?:\/\/github\.com\//i, "").replace(/\.git$|\/$/g, "").replace("/", "__").toLowerCase();
+const touch = typeof matchMedia === "function" && matchMedia("(pointer: coarse), (max-width: 600px)").matches;
 const baseName = (p) => p.split("/").pop().replace(/\.(tsx?|jsx?|mjs|cjs)$/, "");
 // Must match normQuestion in server/answers.mjs (tolerates case, punctuation and spacing).
 const normQuestion = (q) => String(q).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
@@ -132,7 +133,7 @@ export default function App() {
       if (!alive()) return;
       const b = city.buildings[s.index];
       setTour({ stops: res.stops, active: s.index });
-      setCaption({ title: `${k + 1}/${res.stops.length} · ${baseName(s.path)}`, text: s.why, path: s.path });
+      setCaption({ title: baseName(s.path), text: s.why, path: s.path, step: k + 1, total: res.stops.length });
       await Promise.all([camera.current.hop(prev, b), speak(s.why)]);
       prev = b;
     }
@@ -211,18 +212,25 @@ export default function App() {
           <div className="p-stats">
             <div><b>{sel.loc.toLocaleString()}</b><span>lines</span></div>
             <div><b>{sel.churn}</b><span>commits / yr</span></div>
-            <div><b className="cyan">{sel.imports.length}</b><span>imports</span></div>
-            <div><b className="pink">{importedBy}</b><span>imported by</span></div>
+            <div><b className="sky">{sel.imports.length}</b><span>imports</span></div>
+            <div><b className="berry">{importedBy}</b><span>imported by</span></div>
           </div>
           {sel.exports.length > 0 && <div className="p-exports">{sel.exports.map((x) => <code key={x}>{x}</code>)}</div>}
           {sel.doc && <p className="p-doc">{sel.doc}</p>}
-          <a className="p-link" href={`https://github.com/${city.repo}/blob/${city.sha}/${sel.path}`} target="_blank" rel="noreferrer">Open on GitHub ↗</a>
+          <a className="p-link" href={`https://github.com/${city.repo}/blob/${city.sha}/${sel.path}`} target="_blank" rel="noreferrer">Open on GitHub <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M7 17 17 7M8 7h9v9" /></svg></a>
         </aside>
       )}
 
       {caption && (
         <div className={`caption ${busy ? "scanning" : ""}`}>
-          <div className="c-title">{caption.title}</div>
+          <div className="c-head">
+            {caption.total && (
+              <div className="c-steps" aria-label={`Stop ${caption.step} of ${caption.total}`}>
+                {Array.from({ length: caption.total }, (_, i) => <i key={i} className={i < caption.step ? "done" : ""} />)}
+              </div>
+            )}
+            <div className="c-title">{caption.title}</div>
+          </div>
           <div className="c-text">{caption.text}</div>
           {caption.path && <div className="c-path">{caption.path}</div>}
           {(tour || caption.done) && <button className="c-close" onClick={endTour}>End tour · Esc</button>}
@@ -240,7 +248,7 @@ export default function App() {
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3" /></svg>
             </button>
             <input value={question} onChange={(e) => setQuestion(e.target.value)}
-              placeholder={listening ? "Listening…" : "Ask the city…  (hold Space to talk)"} />
+              placeholder={listening ? "Listening…" : touch ? "Ask the city…" : "Ask the city…  (hold Space to talk)"} />
             <button className="go" disabled={busy}>{busy ? "…" : "Ask"}</button>
             <button type="button" className="mute" onClick={() => { setMuted(!muted); setMute(!muted); }} title={muted ? "Narration off" : "Narration on"}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z" />{muted ? <path d="M17 9l5 6M22 9l-5 6" /> : <path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12" />}</svg>
@@ -250,9 +258,13 @@ export default function App() {
       )}
 
       <div className="legend">
-        <div className="ramp" />
-        <div className="ramp-labels"><span>quiet</span><span>commits in the last year</span><span>hot</span></div>
-        <div className="legend-row"><i className="sw cyan" />imports <i className="sw pink" />imported by <span className="dim">· height = lines of code</span></div>
+        <div className="legend-title">Foliage report</div>
+        <div className="legend-sub">Color = commits in the last year</div>
+        <div className="legend-key">Color = commits / yr · Gold roof = top 5%</div>
+        <div className="stages">{STAGES.map((s) => <div key={s.name}><i style={{ background: s.color }} />{s.name}</div>)}</div>
+        <div className="legend-row"><span><i className="sw sky" />imports</span><span><i className="sw berry" />imported by</span></div>
+        <div className="legend-row">Height = lines of code</div>
+        <div className="legend-row">Gold roof = top 5% most changed</div>
       </div>
     </div>
   );
