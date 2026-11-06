@@ -60,7 +60,7 @@ export default function App() {
     setCity(null); setTour(null); setSelected(null); setCaption(null);
     loadCity(repo)
       .then((c) => {
-        if (!c.buildings.length) throw new Error("no JS/TS source files found");
+        if (!c.buildings.length) throw new Error("no JS/TS source files found. Try a different repository.");
         if (!cancelled) { setCity(c); setLoading(null); }
       })
       .catch((e) => !cancelled && setLoading(`Couldn't build this city: ${e.message}`));
