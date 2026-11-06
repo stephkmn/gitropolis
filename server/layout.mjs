@@ -73,6 +73,11 @@ export function layoutCity(files) {
   });
 
   const idx = new Map(buildings.map((b, i) => [b.path, i]));
-  for (const b of buildings) b.imports = b.imports.map((p) => idx.get(p)).filter((i) => i !== undefined);
+  for (const b of buildings) {
+    // importNames[k] = names imported along imports[k] (kept aligned when unresolved targets are dropped)
+    const pairs = b.imports.map((p) => [idx.get(p), b.importNames?.[p] ?? []]).filter(([i]) => i !== undefined);
+    b.imports = pairs.map(([i]) => i);
+    b.importNames = pairs.map(([, n]) => n);
+  }
   return { size: W, districts, buildings };
 }

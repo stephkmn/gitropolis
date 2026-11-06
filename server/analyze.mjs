@@ -78,6 +78,16 @@ async function buildAliases(dir, allFiles) {
 const reImport = /(?:import|export)\s[^'"`;]*?from\s*['"]([^'"]+)['"]|import\s*['"]([^'"]+)['"]|require\(\s*['"]([^'"]+)['"]\s*\)|import\(\s*['"]([^'"]+)['"]\s*\)/g;
 const reNamedImport = /(?:import|export)\s+(?:type\s+)?\{([^}]*)\}\s*from\s*['"]([^'"]+)['"]/g;
 const reExport =/export\s+(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?(?:async\s+)?(?:function\*?|class|const|let|var|interface|type|enum)\s+([A-Za-z_$][\w$]*)/g;
+const reExportDefaultId = /export\s+default\s+([A-Za-z_$][\w$]*)\s*;/g;      // export default Foo;
+const reExportList = /export\s+(?:type\s+)?\{([^}]*)\}(?!\s*from)/g;          // export { a, b as c }
+const reDefaultImport = /import\s+(?:type\s+)?([A-Za-z_$][\w$]*)\s*(?:,\s*\{([^}]*)\})?\s*from\s*['"]([^'"]+)['"]/g;
+const splitNames = (list, pick = 0) => list.split(",").map((x) => x.trim().replace(/^type\s+/, "").split(/\s+as\s+/)[pick] ?? "").map((x) => x.trim()).filter((x) => /^[A-Za-z_$][\w$]*$/.test(x));
+function exportsOf(text) {
+  const names = [...text.matchAll(reExport)].map((m) => m[1]);
+  for (const m of text.matchAll(reExportDefaultId)) names.push(m[1]);
+  for (const m of text.matchAll(reExportList)) names.push(...m[1].split(",").map((x) => x.trim().split(/\s+as\s+/).pop()?.replace(/^type\s+/, "").trim()).filter((x) => x && /^[A-Za-z_$][\w$]*$/.test(x) && x !== "default"));
+  return [...new Set(names)];
+}
 
 // Only a comment at the very top of the file counts as a description.
 function headerDoc(src) {
@@ -131,7 +141,7 @@ export async function analyzeRepo(repoUrl, { log = () => {} } = {}) {
     await Promise.all(src.map(async (f) => {
       const text = await fs.readFile(path.join(dir, f), "utf8").catch(() => "");
       texts.set(f, text);
-      allExports.set(f, [...new Set([...text.matchAll(reExport)].map((m) => m[1]))]);
+      allExports.set(f, exportsOf(text));
     }));
     const definers = new Map(); // export name -> files that define it
     for (const [f, names] of allExports) for (const n of names) (definers.get(n) ?? definers.set(n, []).get(n)).push(f);
@@ -140,31 +150,41 @@ export async function analyzeRepo(repoUrl, { log = () => {} } = {}) {
     // Follow each named import to the file under the barrel's folder that actually defines it.
     const throughBarrel = (barrel, names) => {
       const base = path.posix.dirname(barrel) + "/";
-      const hits = new Set();
+      const hits = new Map(); // definer -> names imported from it
       for (const n of names) {
         const d = (definers.get(n) ?? []).filter((f) => f.startsWith(base) && f !== barrel).sort((a, b) => a.length - b.length)[0];
-        if (d) hits.add(d);
+        if (d) (hits.get(d) ?? hits.set(d, new Set()).get(d)).add(n);
       }
       return hits;
     };
 
-    // Pass 2: imports.
+    // Pass 2: imports, plus WHICH names flow along each edge (lets the tour find the file that defines
+    // the function doing the work, rather than a caller named after the feature).
     const files = src.map((f) => {
       const text = texts.get(f);
-      const imports = new Set();
+      const imports = new Map(); // target -> Set(names)
+      const add = (t, names = []) => {
+        if (!t || t === f) return;
+        const set = imports.get(t) ?? imports.set(t, new Set()).get(t);
+        names.forEach((n) => set.add(n));
+      };
       const viaBarrel = new Set(); // specs already handled by named-import resolution
       for (const m of text.matchAll(reNamedImport)) {
         const target = resolveSpec(f, m[2]);
-        if (!target || !isBarrel(target)) continue;
-        const names = m[1].split(",").map((s) => s.trim().replace(/^type\s+/, "").split(/\s+as\s+/)[0]).filter(Boolean);
+        if (!target) continue;
+        const names = splitNames(m[1]);
+        if (!isBarrel(target)) { add(target, names); continue; }
         const hits = throughBarrel(target, names);
-        if (hits.size) { hits.forEach((h) => h !== f && imports.add(h)); viaBarrel.add(m[2]); }
+        if (hits.size) { hits.forEach((ns, d) => add(d, [...ns])); viaBarrel.add(m[2]); }
+      }
+      for (const m of text.matchAll(reDefaultImport)) {
+        const target = resolveSpec(f, m[3]);
+        if (target && !isBarrel(target)) add(target, [m[1], ...(m[2] ? splitNames(m[2]) : [])]);
       }
       for (const m of text.matchAll(reImport)) {
         const spec = m[1] ?? m[2] ?? m[3] ?? m[4];
         if (viaBarrel.has(spec)) continue;
-        const r = resolveSpec(f, spec);
-        if (r && r !== f) imports.add(r);
+        add(resolveSpec(f, spec));
       }
       return {
         path: f,
@@ -172,7 +192,8 @@ export async function analyzeRepo(repoUrl, { log = () => {} } = {}) {
         churn: churn.get(f) ?? 0,
         exports: allExports.get(f).slice(0, 15),
         doc: headerDoc(text),
-        imports: [...imports],
+        imports: [...imports.keys()],
+        importNames: Object.fromEntries([...imports].map(([t, ns]) => [t, [...ns].slice(0, 8)])),
       };
     });
 

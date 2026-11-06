@@ -49,12 +49,13 @@ for (let run = 1; run <= RUNS; run++) {
     console.log(`${ok ? "PASS" : "FAIL"}  ${c.q}  (${r.debug?.msScout}+${r.debug?.msGuide} ms, ${r.debug?.tokens} tok, nice ${niceHit}/${c.nice.length})`);
     console.log(`        seeds: ${(r.debug?.seeds ?? []).map(short).join(", ")}`);
     console.log(`        candidates: ${cands.size}, edges: ${r.debug?.edges}`);
-    got.forEach((p) => console.log(`        ${groups(c).some((g) => g.includes(p)) ? "*" : c.nice.includes(p) ? "+" : " "} ${p}`));
+    r.stops.forEach(({ path: p, symbol }) => console.log(`        ${groups(c).some((g) => g.includes(p)) ? "*" : c.nice.includes(p) ? "+" : " "} ${p}${symbol ? `  (${symbol})` : ""}`));
     for (const g of missing) {
       const seen = g.some((p) => cands.has(p));
       console.log(`        missing ${g.map(short).join(" | ")}  -> ${seen ? "SELECTION miss (was a candidate)" : "RETRIEVAL miss (never a candidate)"}`);
     }
     if (r.debug?.droppedPaths?.length) console.log(`        dropped: ${r.debug.droppedPaths.join(", ")}`);
+    if (r.debug?.grounded?.length) console.log(`        grounded: ${r.debug.grounded.map((g) => `${g.symbol} -> ${g.definer.split("/").pop()}`).join(", ")}`);
     if (r.debug?.repaired?.length) console.log(`        repaired: ${r.debug.repaired.map((x) => `${x.from} => ${x.to}`).join(", ")}`);
     console.log(`        "${r.answer}"`);
   }

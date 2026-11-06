@@ -5,6 +5,8 @@
 //                    that follows the chain from entry point to the lowest layer.
 // Why: one-shot picking stayed on one layer and missed files with indirect names (eval: 0/3).
 // The files it missed were all one import away from files it did pick.
+// Grounding: each stop names the symbol it contributes, and edges carry the imported names. If a stop's
+// symbol is actually defined in another candidate, that defining file is added to the tour.
 import { buildManifest } from "./analyze.mjs";
 
 const MAX_CANDIDATES = 90;
@@ -38,9 +40,10 @@ const TOUR_SCHEMA = {
         type: "array",
         description: "3-5 files ordered along the code path: entry point -> core logic -> lowest layer.",
         items: {
-          type: "object", additionalProperties: false, required: ["path", "why"],
+          type: "object", additionalProperties: false, required: ["path", "symbol", "why"],
           properties: {
             path: { type: "string", description: "Exact path from the candidate list." },
+            symbol: { type: "string", description: "The function, hook, class or component exported by THIS file that performs this step." },
             why: { type: "string", description: "One spoken sentence, under 25 words, on this file's role." },
           },
         },
@@ -58,12 +61,16 @@ Given a question, name the 4-6 files most likely involved in answering it.
 MANIFEST (path | loc | churn | exports | header doc):
 ${buildManifest(city)}`;
 
-const guidePrompt = (city, cands, edges) => `You are the narrator of Gitropolis, a 3D city where every building is a source file of ${city.repo}.
+const guidePrompt = (city, cands, edges, usedBy) => `You are the narrator of Gitropolis, a 3D city where every building is a source file of ${city.repo}.
 Districts are folders. Height = lines of code. Red heat = churn (commits in the last year).
-Below is the neighbourhood of the code relevant to the question: candidate files and the import edges between them ("A -> B" means A imports B).
+Below is the neighbourhood of the code relevant to the question: candidate files and the import edges between them.
+"A -> B [x, y]" means A imports x and y from B. "used by N here" counts how many candidates import from a file.
 Write a guided tour of 3-5 stops that answers the question.
 Rules:
 - Follow the real code path: start where the feature begins (UI or action), then the core logic, then the lowest layer that actually does the work. Use the import edges to find that chain; consecutive stops should usually be connected by an edge.
+- For each stop, "symbol" is the function, hook, class or component from THAT file's exports that performs the step.
+- A stop must be the file that DEFINES its symbol. If a step's work is done by a function imported from another candidate (see the names on the edges), the defining file is the stop. The caller can still appear as an earlier stop.
+- End at the file that defines the core function the question is about: the one that actually transforms, stores, encrypts or computes. A file that several candidates import the same functions from is often that core. Do not end on a component just because its name matches the feature.
 - Use 4 or 5 stops when the path has that many meaningful layers. Skip generic helpers (types, constants, i18n, icons, utils) unless they are the answer.
 - Every file you mention in "answer" must be one of the stops.
 - Use ONLY paths from the candidate list, copied character-for-character.
@@ -71,8 +78,8 @@ Rules:
 - Speak like a friendly tour guide. Refer to files by plain name without extension (e.g. "the history module"). No markdown.
 - If nothing is relevant, say so in "answer" and return an empty stops array.
 
-CANDIDATES (path | loc | churn | exports | header doc):
-${cands.map(lineFor).join("\n")}
+CANDIDATES (path | loc | churn | exports | header doc | used by N here):
+${cands.map((b) => `${lineFor(b)}${usedBy.get(b.path) ? ` | used by ${usedBy.get(b.path)} here` : ""}`).join("\n")}
 
 IMPORT EDGES:
 ${edges.join("\n")}`;
@@ -149,10 +156,18 @@ export async function askCity({ openai, model, city, question, log = console.log
   const candSet = new Set(candIdx);
   const cands = candIdx.map((i) => B[i]);
   const edges = [];
-  for (const i of candIdx) for (const j of B[i].imports) if (candSet.has(j) && !isHub(j)) edges.push(`${B[i].path} -> ${B[j].path}`);
+  const usedBy = new Map();
+  for (const i of candIdx) {
+    B[i].imports.forEach((j, k) => {
+      if (!candSet.has(j) || isHub(j)) return;
+      const names = (B[i].importNames?.[k] ?? []).slice(0, 6);
+      edges.push(`${B[i].path} -> ${B[j].path}${names.length ? ` [${names.join(", ")}]` : ""}`);
+      usedBy.set(B[j].path, (usedBy.get(B[j].path) ?? 0) + 1);
+    });
+  }
 
   // Stage 2: guide
-  const s2 = await chat(guidePrompt(city, cands, edges), TOUR_SCHEMA);
+  const s2 = await chat(guidePrompt(city, cands, edges, usedBy), TOUR_SCHEMA);
   const raw = JSON.parse(s2.choices[0].message.content);
   const t2 = Date.now();
 
@@ -166,7 +181,30 @@ export async function askCity({ openai, model, city, question, log = console.log
     if (r.how !== "exact") repaired.push({ from: s.path, to: r.path, how: r.how });
     if (seen.has(r.path)) continue;
     seen.add(r.path);
-    stops.push({ path: r.path, why: s.why, index: index.get(r.path) });
+    stops.push({ path: r.path, symbol: s.symbol, why: s.why, index: index.get(r.path) });
+  }
+
+  // Grounding: if a stop's symbol isn't exported by that file, find the file that defines it
+  // (first via the names on its import edges, then a unique definer among the candidates) and add it
+  // right after the caller. The definer takes over the "why"; the caller is re-narrated as calling it.
+  const grounded = [];
+  const plain = (p) => p.split("/").pop().replace(/\.(tsx?|jsx?|mjs|cjs)$/, "");
+  for (let k = 0; k < stops.length; k++) {
+    const st = stops[k], b = B[st.index], sym = (st.symbol ?? "").replace(/\(\)$/, "").trim();
+    if (!sym || b.exports.includes(sym)) continue;
+    let def = b.imports.find((j, e) => (b.importNames?.[e] ?? []).includes(sym));
+    if (def === undefined) {
+      const ds = cands.filter((c) => c.exports.includes(sym));
+      if (ds.length === 1) def = index.get(ds[0].path);
+    }
+    if (def === undefined || seen.has(B[def].path)) continue;
+    const defStop = { path: B[def].path, symbol: sym, why: st.why, index: def };
+    st.why = `It calls ${sym}, which lives in the ${plain(B[def].path)} module.`;
+    if (stops.length >= 5 && k === stops.length - 1) stops[k] = defStop; // no room: the definer replaces the caller
+    else stops.splice(k + 1, 0, defStop);
+    seen.add(defStop.path);
+    grounded.push({ caller: st.path, symbol: sym, definer: defStop.path });
+    k++;
   }
 
   const out = {
@@ -177,10 +215,10 @@ export async function askCity({ openai, model, city, question, log = console.log
     debug: {
       seeds, rawSeedsDropped: rawSeeds.filter((p) => !resolveAll(p)),
       candidates: cands.map((b) => b.path), edges: edges.length,
-      droppedPaths: dropped, repaired, msScout: t1 - t0, msGuide: t2 - t1,
+      droppedPaths: dropped, repaired, grounded, msScout: t1 - t0, msGuide: t2 - t1,
       tokens: (s1.usage?.total_tokens ?? 0) + (s2.usage?.total_tokens ?? 0),
     },
   };
-  log(`[ask ${city.slug}] "${question}"\n  seeds: ${seeds.join(", ")}\n  candidates: ${cands.length}, edges: ${edges.length}\n  tour: ${out.stops.map((s) => s.path).join(" -> ")}${dropped.length ? `\n  DROPPED: ${dropped.join(", ")}` : ""}${repaired.length ? `\n  repaired: ${repaired.map((r) => `${r.from} => ${r.to} (${r.how})`).join(", ")}` : ""}\n  ${out.debug.msScout} + ${out.debug.msGuide} ms`);
+  log(`[ask ${city.slug}] "${question}"\n  seeds: ${seeds.join(", ")}\n  candidates: ${cands.length}, edges: ${edges.length}\n  tour: ${out.stops.map((s) => s.path).join(" -> ")}${dropped.length ? `\n  DROPPED: ${dropped.join(", ")}` : ""}${repaired.length ? `\n  repaired: ${repaired.map((r) => `${r.from} => ${r.to} (${r.how})`).join(", ")}` : ""}${grounded.length ? `\n  grounded: ${grounded.map((g) => `${g.symbol}: ${g.caller} -> ${g.definer}`).join(", ")}` : ""}\n  ${out.debug.msScout} + ${out.debug.msGuide} ms`);
   return out;
 }
