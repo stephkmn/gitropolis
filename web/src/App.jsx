@@ -7,6 +7,8 @@ const API = (import.meta.env.VITE_API_URL || "http://localhost:8787").replace(/\
 const DEFAULT_REPO = "excalidraw/excalidraw";
 const slugOf = (repo) => repo.replace(/^https?:\/\/github\.com\//i, "").replace(/\.git$|\/$/g, "").replace("/", "__").toLowerCase();
 const baseName = (p) => p.split("/").pop().replace(/\.(tsx?|jsx?|mjs|cjs)$/, "");
+// Must match normQuestion in server/answers.mjs (tolerates case, punctuation and spacing).
+const normQuestion = (q) => String(q).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 const SUGGESTIONS = {
   excalidraw__excalidraw: ["How does undo work?", "How is live collaboration end-to-end encrypted?", "How does text-to-diagram turn a prompt into a drawing?", "Which files are the riskiest to change?"],
 };
@@ -53,6 +55,7 @@ export default function App() {
   const camera = useRef(null);
   const tourId = useRef(0);
   const rec = useRef(null);
+  const frozenAnswers = useRef({});
 
   useEffect(() => {
     let cancelled = false;
@@ -66,6 +69,19 @@ export default function App() {
       .catch((e) => !cancelled && setLoading(`Couldn't build this city: ${e.message}`));
     return () => { cancelled = true; };
   }, [repo]);
+
+  // Frozen demo answers ship with the frontend (web/public/answers, made by server/freeze.mjs):
+  // those questions play instantly and identically, without waking the server.
+  useEffect(() => {
+    frozenAnswers.current = {};
+    if (!city) return;
+    let cancelled = false;
+    fetch(`/answers/${city.slug}.json`)
+      .then((r) => (r.ok && r.headers.get("content-type")?.includes("json") ? r.json() : null))
+      .then((d) => { if (!cancelled && d?.citySha === city.sha) frozenAnswers.current = d.answers ?? {}; })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [city]);
 
   const endTour = useCallback(() => {
     tourId.current++;
@@ -84,7 +100,17 @@ export default function App() {
     setCaption({ title: "Scanning the city", text: `“${q}”` });
     camera.current?.overview();
     let res;
-    try {
+    const hit = frozenAnswers.current[normQuestion(q)];
+    if (hit) {
+      const index = new Map(city.buildings.map((b, i) => [b.path, i]));
+      const stops = hit.stops.map((s) => ({ ...s, index: index.get(s.path) }));
+      if (stops.every((s) => s.index !== undefined)) {
+        res = { answer: hit.answer, stops };
+        await new Promise((r) => setTimeout(r, 1500)); // keep the scanning beat; an instant cut looks canned
+        if (!alive()) return;
+      }
+    }
+    if (!res) try {
       res = await post("/api/ask", { slug: city.slug, question: q }).catch(async (e) => {
         if (!/Unknown city/.test(e.message)) throw e; // server restarted and forgot a live-loaded city
         await post("/api/city", { repoUrl: `https://github.com/${city.repo}` });

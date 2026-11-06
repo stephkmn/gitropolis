@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import OpenAI from "openai";
 import { analyzeRepo, parseRepoUrl, cityPath, exists } from "./analyze.mjs";
 import { askCity } from "./ask.mjs";
+import { loadFrozen, normQuestion } from "./answers.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const CITY_DIR = path.join(here, "cities");
@@ -17,6 +18,12 @@ await fs.mkdir(CITY_DIR, { recursive: true });
 const cities = new Map();   // slug -> city (memory cache)
 const inflight = new Map(); // slug -> Promise<city>
 const answers = new Map();  // slug|question -> answer (keeps demo answers stable + cheap)
+const frozen = new Map();   // slug -> Map(normQuestion -> frozen answer), loaded from server/answers/
+
+async function getFrozen(slug, city) {
+  if (!frozen.has(slug)) frozen.set(slug, loadFrozen(slug, city));
+  return frozen.get(slug);
+}
 
 async function getCity(slug) {
   if (cities.has(slug)) return cities.get(slug);
@@ -60,8 +67,12 @@ app.post("/api/ask", async (req, res) => {
     if (!question || typeof question !== "string" || question.length > 300) throw new Error("Ask a question (max 300 chars)");
     const city = await getCity(String(slug));
     if (!city) throw new Error("Unknown city; load it first");
-    const key = `${slug}|${question.trim().toLowerCase().replace(/[?.!\s]+$/, "")}`;
-    if (answers.has(key) && !req.body.fresh) return res.json(answers.get(key));
+    const key = `${slug}|${normQuestion(question)}`;
+    if (!req.body.fresh) {
+      const hit = (await getFrozen(String(slug), city)).get(normQuestion(question));
+      if (hit) return res.json(hit);
+      if (answers.has(key)) return res.json(answers.get(key));
+    }
     if (!openai) throw new Error("OPENAI_API_KEY is not set on the server");
     const out = await askCity({ openai, model: MODEL, city, question });
     answers.set(key, out);

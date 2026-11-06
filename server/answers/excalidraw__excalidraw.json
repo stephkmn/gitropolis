@@ -1,0 +1,108 @@
+{
+  "slug": "excalidraw__excalidraw",
+  "citySha": "701b901a0f1ba3d0b390d9cdf63d112e25abac4b",
+  "answers": {
+    "how does undo work": {
+      "question": "How does undo work?",
+      "answer": "Undo starts with user actions triggering undo commands, managed by the action manager, which then updates the history state. The history module maintains the undo stack and applies changes to the store, which is the core data structure managing elements and state.",
+      "stops": [
+        {
+          "path": "packages/excalidraw/components/App.tsx",
+          "symbol": "App",
+          "why": "This is the main component where undo actions are initiated and connected to the action manager."
+        },
+        {
+          "path": "packages/excalidraw/actions/actionHistory.tsx",
+          "symbol": "createUndoAction",
+          "why": "Defines the undo action that triggers the undo process."
+        },
+        {
+          "path": "packages/excalidraw/actions/manager.tsx",
+          "symbol": "ActionManager",
+          "why": "Manages all actions including undo, coordinating their execution."
+        },
+        {
+          "path": "packages/excalidraw/history.ts",
+          "symbol": "History",
+          "why": "Maintains the undo and redo stacks and applies history changes."
+        },
+        {
+          "path": "packages/element/src/store.ts",
+          "symbol": "Store",
+          "why": "The core data store where undo changes are applied to elements and app state."
+        }
+      ],
+      "model": "gpt-4.1-mini",
+      "frozenAt": "2026-11-06T04:28:20.309Z"
+    },
+    "how is live collaboration end to end encrypted": {
+      "question": "How is live collaboration end-to-end encrypted?",
+      "answer": "Live collaboration encryption starts in the collaboration UI layer, which uses core data restoration and reconciliation logic, and finally relies on encryption utilities to encrypt and decrypt data securely.",
+      "stops": [
+        {
+          "path": "excalidraw-app/collab/Collab.tsx",
+          "symbol": "Collab",
+          "why": "This is the collaboration UI layer managing live collaboration and invoking encryption and data handling."
+        },
+        {
+          "path": "excalidraw-app/data/index.ts",
+          "symbol": "importFromBackend",
+          "why": "This module handles core data processing including importing and decrypting collaboration data."
+        },
+        {
+          "path": "packages/excalidraw/data/encryption.ts",
+          "symbol": "encryptData",
+          "why": "This file provides the core encryption and decryption functions used for securing live collaboration data."
+        }
+      ],
+      "model": "gpt-4.1-mini",
+      "frozenAt": "2026-11-06T04:28:22.867Z"
+    },
+    "how does text to diagram turn a prompt into a drawing": {
+      "question": "How does text-to-diagram turn a prompt into a drawing?",
+      "answer": "The text-to-diagram feature starts in the TextToDiagram component, which manages user input and state. It uses a text generation hook to process the prompt and generate diagram data. This data is then converted into Excalidraw elements by core conversion functions, producing the final drawing.",
+      "stops": [
+        {
+          "path": "packages/excalidraw/components/TTDDialog/TextToDiagram.tsx",
+          "symbol": "TextToDiagram",
+          "why": "This component initiates the text-to-diagram process by handling user input and coordinating the feature."
+        },
+        {
+          "path": "packages/excalidraw/components/TTDDialog/hooks/useTextGeneration.ts",
+          "symbol": "useTextGeneration",
+          "why": "This hook processes the prompt and manages text generation logic for diagram creation."
+        },
+        {
+          "path": "packages/excalidraw/components/TTDDialog/common.ts",
+          "symbol": "convertMermaidToExcalidraw",
+          "why": "This module converts Mermaid diagram data into Excalidraw drawing elements."
+        }
+      ],
+      "model": "gpt-4.1-mini",
+      "frozenAt": "2026-11-06T04:28:26.061Z"
+    },
+    "which files are the riskiest to change": {
+      "question": "Which files are the riskiest to change?",
+      "answer": "The riskiest files to change are those with the highest churn and significant lines of code, indicating frequent modifications and complexity. The element binding module, the main Excalidraw container component, and the linear element editor are the top hotspots due to their size and recent activity.",
+      "stops": [
+        {
+          "path": "packages/excalidraw/components/App.tsx",
+          "symbol": "ExcalidrawContainerContext",
+          "why": "This large UI component has the highest churn, indicating frequent changes and complexity."
+        },
+        {
+          "path": "packages/element/src/binding.ts",
+          "symbol": "BindingStrategy",
+          "why": "A core module with many exports and high churn, crucial for element binding logic."
+        },
+        {
+          "path": "packages/element/src/linearElementEditor.ts",
+          "symbol": "LinearElementEditor",
+          "why": "A sizable editor module with notable churn, handling linear element editing logic."
+        }
+      ],
+      "model": "gpt-4.1-mini",
+      "frozenAt": "2026-11-06T04:28:28.914Z"
+    }
+  }
+}

@@ -36,6 +36,19 @@ cd server && node bake.mjs https://github.com/excalidraw/excalidraw https://gith
 
 This writes `server/cities/<slug>.json` (so `/api/ask` knows the city) and `web/public/cities/<slug>.json` (instant load, with no wait for a cold server). Commit both.
 
+## Freeze the demo answers
+
+```bash
+cd server && OPENAI_API_KEY=sk-... OPENAI_MODEL=gpt-4.1 node freeze.mjs
+```
+
+This asks each demo question (`server/demo-cases.mjs`) with the real model and saves an answer only if its tour passes the test checks. It retries up to `TRIES` times (default 3). Answers are written to `server/answers/<slug>.json` and `web/public/answers/<slug>.json`. Read the printed tours, then commit both files.
+
+- The frontend plays frozen questions straight from `web/public/answers`, with no server call. They are instant and identical every time, even while Render is asleep. Any other question goes to the live model.
+- Questions are matched ignoring case, punctuation and spacing, so a spoken "how does undo work" matches the button text.
+- Answers are tied to the city version (`citySha`). After re-baking a city, run `freeze.mjs` again. Until then, both the frontend and the server skip the old answers and use the live model.
+- `eval.mjs` always sends `fresh: true`, so it keeps testing the live model, never the frozen answers.
+
 ## Test set
 
 ```bash

@@ -1,35 +1,14 @@
-// Test set for "Ask the city". Run against a live server: API=http://localhost:8787 node eval.mjs
+// Test set for "Ask the city" (cases live in demo-cases.mjs). Run against a live server: API=http://localhost:8787 node eval.mjs
+// Sends fresh:true, so it always tests the live model, never the frozen demo answers.
 // A question passes if every MUST group appears in the tour. A group is a path or a list of acceptable paths.
 // Each must group is also checked against the stage-2 candidate list, so a failure says whether the
 // right file was never retrieved (retrieval miss) or was seen and skipped (selection miss).
+import { CASES, SLUG, groups } from "./demo-cases.mjs";
+
 const API = process.env.API || "http://localhost:8787";
 const RUNS = Number(process.env.RUNS || 1); // >1 to check stability
-const SLUG = "excalidraw__excalidraw";
-const P = "packages/excalidraw/";
-const CASES = [
-  {
-    q: "How does undo work?",
-    // history.ts keeps the stacks; store.ts captures each change (history.ts imports it); delta.ts holds the reversible diffs.
-    must: [`${P}history.ts`, ["packages/element/src/store.ts", "packages/element/src/delta.ts"]],
-    nice: [`${P}actions/actionHistory.tsx`, "packages/element/src/store.ts", "packages/element/src/delta.ts"],
-  },
-  {
-    q: "How is live collaboration end-to-end encrypted?",
-    // Portal.tsx calls encryptData before broadcasting; Collab.tsx calls decryptData on receive.
-    must: [`${P}data/encryption.ts`, ["excalidraw-app/collab/Collab.tsx", "excalidraw-app/collab/Portal.tsx"]],
-    nice: ["excalidraw-app/collab/Portal.tsx", "excalidraw-app/collab/Collab.tsx", "excalidraw-app/data/index.ts", `${P}data/reconcile.ts`],
-  },
-  {
-    q: "How does text-to-diagram turn a prompt into a drawing?",
-    // Revised: mermaid.ts is only a 52-line config. The real path is TextToDiagram.tsx -> useTextGeneration /
-    // TTDStreamFetch (LLM call) -> common.ts (convertMermaidToExcalidraw + insertToEditor).
-    must: [[`${P}components/TTDDialog/TextToDiagram.tsx`, `${P}components/TTDDialog/TTDDialog.tsx`], `${P}components/TTDDialog/common.ts`],
-    nice: [`${P}components/TTDDialog/hooks/useTextGeneration.ts`, `${P}components/TTDDialog/utils/TTDStreamFetch.ts`, `${P}components/TTDDialog/MermaidToExcalidraw.tsx`, `${P}mermaid.ts`],
-  },
-];
 
 const short = (p) => p.replace(/^packages\//, "").replace(/^excalidraw-app\//, "app/");
-const groups = (c) => c.must.map((g) => (Array.isArray(g) ? g : [g]));
 
 let pass = 0, total = 0;
 for (let run = 1; run <= RUNS; run++) {
