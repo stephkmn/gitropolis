@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Component, useCallback, useEffect, useRef, useState } from "react";
 import { Canvas } from "@react-three/fiber";
 import Scene from "./Scene.jsx";
 import { speak, stopSpeaking, listen, canListen, setMuted } from "./speech.js";
@@ -26,6 +26,17 @@ async function loadCity(repo) {
   return post("/api/city", { repoUrl: repo.includes("github.com") ? repo : `https://github.com/${repo}` });
 }
 
+// A render error inside the Canvas would otherwise unmount the whole app (blank screen).
+class SceneBoundary extends Component {
+  state = { error: null };
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error) { console.error(error); }
+  render() {
+    if (this.state.error) return <div className="loading">Couldn't draw this city: {this.state.error.message}</div>;
+    return this.props.children;
+  }
+}
+
 export default function App() {
   const [repo, setRepo] = useState(() => new URLSearchParams(location.search).get("repo") || DEFAULT_REPO);
   const [city, setCity] = useState(null);
@@ -48,7 +59,10 @@ export default function App() {
     setLoading(`Surveying ${repo}…`);
     setCity(null); setTour(null); setSelected(null); setCaption(null);
     loadCity(repo)
-      .then((c) => { if (!cancelled) { setCity(c); setLoading(null); } })
+      .then((c) => {
+        if (!c.buildings.length) throw new Error("no JS/TS source files found");
+        if (!cancelled) { setCity(c); setLoading(null); }
+      })
       .catch((e) => !cancelled && setLoading(`Couldn't build this city: ${e.message}`));
     return () => { cancelled = true; };
   }, [repo]);
@@ -133,6 +147,7 @@ export default function App() {
 
   return (
     <div className="app">
+      <SceneBoundary key={repo}>
       <Canvas
         camera={{ fov: 45, near: 0.5, far: 8000, position: [400, 400, 400] }}
         dpr={[1, 2]}
@@ -144,6 +159,7 @@ export default function App() {
             tour={tour} busy={busy} apiRef={camera} />
         )}
       </Canvas>
+      </SceneBoundary>
 
       <header className="top">
         <div className="brand">

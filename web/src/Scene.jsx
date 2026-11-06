@@ -57,6 +57,7 @@ function HotRoofs({ city }) {
   const ref = useRef();
   const hot = useMemo(() => city.buildings.filter((b) => b.churn > 0 && b.churnPct >= 0.95), [city]);
   useLayoutEffect(() => {
+    if (!ref.current) return; // no hot files -> mesh never mounts
     const m = new THREE.Matrix4(), q = new THREE.Quaternion();
     hot.forEach((b, i) => {
       m.compose(new THREE.Vector3(b.x, b.y + b.h, b.z), q, new THREE.Vector3(b.w * 0.94, 0.5, b.d * 0.94));
