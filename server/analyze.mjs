@@ -76,7 +76,8 @@ async function buildAliases(dir, allFiles) {
 }
 
 const reImport = /(?:import|export)\s[^'"`;]*?from\s*['"]([^'"]+)['"]|import\s*['"]([^'"]+)['"]|require\(\s*['"]([^'"]+)['"]\s*\)|import\(\s*['"]([^'"]+)['"]\s*\)/g;
-const reExport = /export\s+(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?(?:async\s+)?(?:function\*?|class|const|let|var|interface|type|enum)\s+([A-Za-z_$][\w$]*)/g;
+const reNamedImport = /(?:import|export)\s+(?:type\s+)?\{([^}]*)\}\s*from\s*['"]([^'"]+)['"]/g;
+const reExport =/export\s+(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?(?:async\s+)?(?:function\*?|class|const|let|var|interface|type|enum)\s+([A-Za-z_$][\w$]*)/g;
 
 // Only a comment at the very top of the file counts as a description.
 function headerDoc(src) {
@@ -124,22 +125,56 @@ export async function analyzeRepo(repoUrl, { log = () => {} } = {}) {
     };
 
     log(`reading ${src.length} files`);
-    const files = await Promise.all(src.map(async (f) => {
+    // Pass 1: text + full export list (needed to see through barrel files).
+    const texts = new Map();
+    const allExports = new Map();
+    await Promise.all(src.map(async (f) => {
       const text = await fs.readFile(path.join(dir, f), "utf8").catch(() => "");
+      texts.set(f, text);
+      allExports.set(f, [...new Set([...text.matchAll(reExport)].map((m) => m[1]))]);
+    }));
+    const definers = new Map(); // export name -> files that define it
+    for (const [f, names] of allExports) for (const n of names) (definers.get(n) ?? definers.set(n, []).get(n)).push(f);
+    const isBarrel = (f) => /(^|\/)index\.(ts|tsx|js|jsx|mjs)$/.test(f);
+    // `import { Store } from "@excalidraw/element"` resolves to element/src/index.ts, which only re-exports.
+    // Follow each named import to the file under the barrel's folder that actually defines it.
+    const throughBarrel = (barrel, names) => {
+      const base = path.posix.dirname(barrel) + "/";
+      const hits = new Set();
+      for (const n of names) {
+        const d = (definers.get(n) ?? []).filter((f) => f.startsWith(base) && f !== barrel).sort((a, b) => a.length - b.length)[0];
+        if (d) hits.add(d);
+      }
+      return hits;
+    };
+
+    // Pass 2: imports.
+    const files = src.map((f) => {
+      const text = texts.get(f);
       const imports = new Set();
+      const viaBarrel = new Set(); // specs already handled by named-import resolution
+      for (const m of text.matchAll(reNamedImport)) {
+        const target = resolveSpec(f, m[2]);
+        if (!target || !isBarrel(target)) continue;
+        const names = m[1].split(",").map((s) => s.trim().replace(/^type\s+/, "").split(/\s+as\s+/)[0]).filter(Boolean);
+        const hits = throughBarrel(target, names);
+        if (hits.size) { hits.forEach((h) => h !== f && imports.add(h)); viaBarrel.add(m[2]); }
+      }
       for (const m of text.matchAll(reImport)) {
-        const r = resolveSpec(f, m[1] ?? m[2] ?? m[3] ?? m[4]);
+        const spec = m[1] ?? m[2] ?? m[3] ?? m[4];
+        if (viaBarrel.has(spec)) continue;
+        const r = resolveSpec(f, spec);
         if (r && r !== f) imports.add(r);
       }
       return {
         path: f,
         loc: text.split("\n").length,
         churn: churn.get(f) ?? 0,
-        exports: [...new Set([...text.matchAll(reExport)].map((m) => m[1]))].slice(0, 15),
+        exports: allExports.get(f).slice(0, 15),
         doc: headerDoc(text),
         imports: [...imports],
       };
-    }));
+    });
 
     const city = layoutCity(files);
     return {

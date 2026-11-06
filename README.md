@@ -5,7 +5,11 @@ Fly through any GitHub repo as a 3D city, then ask it questions out loud. The ca
 - **Buildings** are source files. Height is `sqrt(lines of code)`. Color is commits in the last year (cool to hot), and the top 5% get glowing roofs.
 - **Districts** are folders, laid out as a squarified treemap. Single-child folder chains are collapsed.
 - **Bridges** appear when you click a building: cyan arcs for what it imports, magenta for what imports it. Monorepo aliases are resolved from tsconfig `paths` and workspace `package.json` names.
-- **Ask the city:** a compact manifest (path | loc | churn | exports | header doc) goes to an OpenAI model using structured outputs. The model returns `{answer, stops[]}` and the server drops any path not in the repo.
+- **Ask the city** (`server/ask.mjs`) runs in two stages, both using structured outputs:
+  1. *Scout:* the model reads the whole manifest (path | loc | churn | exports | header doc) and names 4–6 seed files.
+  2. *Expand:* the server adds the seeds' import-graph neighbours: the files they import, the files that import them, and one more hop downward. Generic hub files (imported by 60+ files) are skipped.
+  3. *Guide:* the model sees only that neighbourhood plus its import edges, and writes a 3–5 stop tour along the real code path.
+  Paths the model returns are matched exactly, then by unique suffix, unique basename, or a small typo. Anything still unmatched is dropped and logged.
 
 ## Run locally
 
